@@ -36,5 +36,5 @@ type metadata struct {
 	syncReplicas uint
 	// Maximum time to wait for synchronous replication
 	// (O wait until the number of replicas has been reached)
-	syncTimeout uint
+	syncTimeout time.Duration
 }

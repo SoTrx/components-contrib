@@ -79,7 +79,7 @@ func parseRedisMetadata(meta pubsub.Metadata) (metadata, error) {
 		queueDepth:        100,
 		concurrency:       10,
 		syncReplicas:      0,
-		syncTimeout:       1000,
+		syncTimeout:       1 * time.Second,
 	}
 
 	if val, ok := meta.Properties[consumerID]; ok && val != "" {
@@ -141,11 +141,13 @@ func parseRedisMetadata(meta pubsub.Metadata) (metadata, error) {
 	}
 
 	if val, ok := meta.Properties[syncTimeout]; ok && val != "" {
-		syncTimeout, err := strconv.ParseUint(val, 10, 64)
-		if err != nil {
-			return m, fmt.Errorf("redis streams error: invalid syncTimeout %s, %s", val, err)
+		if syncTimeoutMs, err := strconv.ParseUint(val, 10, 64); err == nil {
+			m.syncTimeout = time.Duration(syncTimeoutMs) * time.Millisecond
+		} else if d, err := time.ParseDuration(val); err == nil {
+			m.processingTimeout = d
+		} else {
+			return m, fmt.Errorf("redis streams error: can't parse syncTimeout field: %s", err)
 		}
-		m.syncTimeout = uint(syncTimeout)
 	}
 
 	return m, nil
@@ -184,7 +186,7 @@ func (r *redisStreams) Publish(req *pubsub.PublishRequest) error {
 		Values:       map[string]interface{}{"data": req.Data},
 	})
 	if r.metadata.syncReplicas > 0 {
-		pipe.Do(r.ctx, "WAIT", r.metadata.syncReplicas, r.metadata.syncTimeout)
+		pipe.Do(r.ctx, "WAIT", r.metadata.syncReplicas, r.metadata.syncTimeout.Milliseconds())
 	}
 
 	_, err := pipe.Exec(r.ctx)

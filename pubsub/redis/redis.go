@@ -35,6 +35,8 @@ const (
 	queueDepth        = "queueDepth"
 	concurrency       = "concurrency"
 	maxLenApprox      = "maxLenApprox"
+	syncReplicas      = "syncReplicas"
+	syncTimeout       = "syncTimeout"
 )
 
 // redisStreams handles consuming from a Redis stream using
@@ -76,6 +78,8 @@ func parseRedisMetadata(meta pubsub.Metadata) (metadata, error) {
 		redeliverInterval: 15 * time.Second,
 		queueDepth:        100,
 		concurrency:       10,
+		syncReplicas:      0,
+		syncTimeout:       1000,
 	}
 
 	if val, ok := meta.Properties[consumerID]; ok && val != "" {
@@ -128,6 +132,22 @@ func parseRedisMetadata(meta pubsub.Metadata) (metadata, error) {
 		m.maxLenApprox = maxLenApprox
 	}
 
+	if val, ok := meta.Properties[syncReplicas]; ok && val != "" {
+		syncReplicas, err := strconv.ParseUint(val, 10, 64)
+		if err != nil {
+			return m, fmt.Errorf("redis streams error: invalid syncReplicas %s, %s", val, err)
+		}
+		m.syncReplicas = uint(syncReplicas)
+	}
+
+	if val, ok := meta.Properties[syncTimeout]; ok && val != "" {
+		syncTimeout, err := strconv.ParseUint(val, 10, 64)
+		if err != nil {
+			return m, fmt.Errorf("redis streams error: invalid syncTimeout %s, %s", val, err)
+		}
+		m.syncTimeout = uint(syncTimeout)
+	}
+
 	return m, nil
 }
 
@@ -157,11 +177,17 @@ func (r *redisStreams) Init(metadata pubsub.Metadata) error {
 }
 
 func (r *redisStreams) Publish(req *pubsub.PublishRequest) error {
-	_, err := r.client.XAdd(r.ctx, &redis.XAddArgs{
+	pipe := r.client.Pipeline()
+	pipe.XAdd(r.ctx, &redis.XAddArgs{
 		Stream:       req.Topic,
 		MaxLenApprox: r.metadata.maxLenApprox,
 		Values:       map[string]interface{}{"data": req.Data},
-	}).Result()
+	})
+	if r.metadata.syncReplicas > 0 {
+		pipe.Do(r.ctx, "WAIT", r.metadata.syncReplicas, r.metadata.syncTimeout)
+	}
+
+	_, err := pipe.Exec(r.ctx)
 	if err != nil {
 		return fmt.Errorf("redis streams: error from publish: %s", err)
 	}
@@ -400,7 +426,7 @@ func (r *redisStreams) removeMessagesThatNoLongerExistFromPending(ctx context.Co
 			Stream:   stream,
 			Group:    r.metadata.consumerID,
 			Consumer: r.metadata.consumerID,
-			MinIdle:  0,
+			MinIdle:  r.metadata.processingTimeout,
 			Messages: []string{pendingID},
 		}).Result()
 		if err != nil && !errors.Is(err, redis.Nil) {

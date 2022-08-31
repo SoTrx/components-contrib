@@ -31,4 +31,10 @@ type metadata struct {
 
 	// the max len of stream
 	maxLenApprox int64
+	// The number of Redis replicas that must have synchronously acknowledged the message
+	// (O disables synchronous replication)
+	syncReplicas uint
+	// Maximum time to wait for synchronous replication
+	// (O wait until the number of replicas has been reached)
+	syncTimeout uint
 }
